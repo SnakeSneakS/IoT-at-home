@@ -1,0 +1,32 @@
+<ul id="ir-signal-history" class="list-group" style="max-height: 300px; overflow-y: auto;">
+    <!-- IR信号の履歴がここに追加される -->
+</ul>
+
+<script defer>
+    const socket = io();
+    const historyList = document.getElementById("ir-signal-history");
+
+    socket.on("connect", () => {
+        console.log("Socket.IO connected");
+    });
+
+    socket.on("ir_signal", function (data) {
+        console.debug("received ir signal: ");
+        console.debug(data);
+
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('ja-JP', { hour12: false });
+        const li = document.createElement("li");
+        li.className = "list-group-item d-flex justify-content-between align-items-center";
+        li.innerHTML = `
+            <span><strong>${timeStr}</strong></span>
+            <code>${data.code}</code>
+        `;
+
+        historyList.prepend(li);
+
+        if (historyList.children.length > 100) {
+            historyList.removeChild(historyList.lastChild);
+        }
+    });
+</script>

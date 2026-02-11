@@ -1,0 +1,10 @@
+FROM python:3.9.19
+
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+ENV FLASK_ENV=development
+ENV FLASK_DEBUG=1
+
+# 例えば streamer.py 実行デフォルトにしたいなら
+CMD ["python", "main.py"]

@@ -1,0 +1,110 @@
+{% extends "layout.html" %}
+
+{% block title %}コントローラ一覧{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+    <h2>Registered Controllers</h2>
+    <ul class="list-group mb-3" id="controller-list">
+        <!-- JSでコントローラ一覧を動的生成 -->
+    </ul>
+
+    <h3>Add New Controller</h3>
+    <div>
+        <input id="controller-name" class="form-control mb-2" placeholder="Controller Name (例: controller1)" />
+        <button id="add-controller-btn" class="btn btn-primary">Add</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function fetchControllers() {
+        try {
+            const res = await fetch('/api/controllers');
+            if (!res.ok) throw new Error('Failed to fetch');
+            const data = await res.json();
+            const list = document.getElementById('controller-list');
+            list.innerHTML = '';
+
+            if (data.controllers.length === 0) {
+                list.innerHTML = '<li class="list-group-item">コントローラは登録されていません</li>';
+                return;
+            }
+
+            data.controllers.forEach(ctrl => {
+                const li = document.createElement('li');
+                li.className = 'list-group-item d-flex justify-content-between align-items-center flex-column flex-md-row';
+
+                const leftDiv = document.createElement('div');
+
+                const link = document.createElement('a');
+                link.href = `/controller/${ctrl.name}`;
+                link.textContent = ctrl.name;
+                link.style.fontWeight = 'bold';
+
+                const desc = document.createElement('div');
+                desc.textContent = ctrl.description || '(説明なし)';
+                desc.style.fontSize = '0.9em';
+                desc.style.color = '#666';
+
+                leftDiv.appendChild(link);
+                leftDiv.appendChild(desc);
+
+                const delBtn = document.createElement('button');
+                delBtn.textContent = 'Delete';
+                delBtn.className = 'btn btn-sm btn-danger';
+                delBtn.addEventListener('click', async () => {
+                    if (!confirm(`${ctrl.name} を削除しますか？`)) return;
+                    try {
+                        const res = await fetch(`/api/controllers/${ctrl.name}`, { method: 'DELETE' });
+                        if (!res.ok) throw new Error('削除失敗');
+                        fetchControllers();
+                    } catch {
+                        alert('削除に失敗しました');
+                    }
+                });
+
+                li.appendChild(leftDiv);
+                li.appendChild(delBtn);
+                list.appendChild(li);
+            });
+        } catch {
+            alert('コントローラ一覧の取得に失敗しました');
+        }
+    }
+
+    document.getElementById('add-controller-btn').addEventListener('click', async () => {
+        let name = document.getElementById('controller-name').value.trim();
+
+        if (!name) {
+            alert('ファイル名を入力してください');
+            return;
+        }
+
+        try {
+            const res = await fetch(`/api/controllers/${name}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    description: '',
+                    buttons: []
+                })
+            });
+            if (!res.ok) {
+                const json = await res.json();
+                throw new Error(json.error || '作成失敗');
+            }
+            document.getElementById('controller-name').value = '';
+            fetchControllers();
+        } catch (e) {
+            alert('コントローラの作成に失敗しました: ' + e.message);
+        }
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+        fetchControllers();
+    });
+</script>
+{% endblock %}

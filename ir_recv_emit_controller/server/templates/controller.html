@@ -1,0 +1,573 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ controller_name }} - コントローラ操作{% endblock %}
+
+{% block styles %}
+{{ super() }}
+<style>
+    .remote-canvas {
+        position: relative;
+        width: 100%;
+        min-height: 600px;
+        border: 1px solid #ccc;
+        background-color: #333333;
+    }
+
+    .remote-button {
+        position: absolute;
+        text-align: center;
+        cursor: pointer;
+        user-select: none;
+        border-radius: 4px;
+        padding: 5px 10px;
+        box-sizing: border-box;
+
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .remote-button .resize-handle {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        bottom: 0;
+        right: 0;
+        background-color: #555;
+        cursor: se-resize;
+        z-index: 2;
+        border-radius: 2px;
+    }
+
+    .remote-button.clicked {
+        transform: scale(0.95);
+        opacity: 0.8;
+        transition: transform 0.1s ease, opacity 0.1s ease;
+    }
+
+
+    /*
+        .tooltip-inner {
+            max-width: 250px;
+            background-color: #333;
+            color: #fff;
+            font-size: 0.85rem;
+            padding: 6px 10px;
+            border-radius: 4px;
+        }
+        */
+</style>{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary mb-3">← コントローラ一覧に戻る</a>
+
+    <h2>
+        <input type="text" id="remote-name-input" class="form-control form-control-lg"
+            style="max-width: 400px; display: inline-block;" readonly>
+    </h2>
+    <p>
+        <textarea id="remote-description-input" class="form-control" rows="2" placeholder="説明を入力" readonly
+            style="max-width: 600px;"></textarea>
+    </p>
+
+    <div class="mb-3" id="add-button-container" style="display:none;">
+        <h5>ボタンを追加</h5>
+        <form id="add-button-form" class="d-flex flex-wrap align-items-center gap-2">
+            <input type="text" id="new-label" class="form-control form-control-sm" placeholder="ラベル" required
+                style="max-width: 120px;">
+            <input type="text" id="new-ir-code" class="form-control form-control-sm" placeholder="IRコード (#0xXXXXXXXX)"
+                required style="max-width: 180px;">
+            <input type="text" id="new-description" class="form-control form-control-sm" placeholder="説明"
+                style="max-width: 200px;">
+            <button type="submit" class="btn btn-primary btn-sm">追加</button>
+        </form>
+    </div>
+
+
+    <div class="mb-3">
+        <label><strong>モード切替:</strong></label>
+        <button class="btn btn-primary" id="toggle-mode">現在: <span id="mode-label">use</span>モード</button>
+        <button class="btn btn-success" id="save-edits" style="display:none;">💾 変更を保存</button>
+    </div>
+
+    <div class="remote-canvas" id="canvas"></div>
+</div>
+
+<!-- モーダル定義 -->
+<div class="modal fade" id="editModal" tabindex="-1" role="dialog" aria-hidden="true">
+    <div class="modal-dialog" role="document">
+        <form id="edit-form" class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">ボタンを編集</h5>
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-id">
+                <div class="form-group">
+                    <label>背景色</label>
+                    <input type="color" id="edit-bgcolor" class="form-control" value="#28a745">
+                </div>
+                <div class="form-group">
+                    <label>文字色</label>
+                    <input type="color" id="edit-textcolor" class="form-control" value="#000000">
+                </div>
+                <div class="form-group">
+                    <label>ラベル</label>
+                    <input type="text" id="edit-label" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>IRコード　(#0xXXXXXXXX)</label>
+                    <input type="text" id="edit-code" class="form-control" required>
+                </div>
+                <div class="form-group">
+                    <label>説明</label>
+                    <input type="text" id="edit-description" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>幅</label>
+                    <input type="number" id="edit-width" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>高さ</label>
+                    <input type="number" id="edit-height" class="form-control">
+                </div>
+                <div class="form-group">
+                    <label>文字サイズ (px)</label>
+                    <input type="number" id="edit-textsize" class="form-control" min="8" max="72" step="1" value="14">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="submit" class="btn btn-primary">更新</button>
+                <button type="button" class="btn btn-danger" id="delete-button">削除</button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">キャンセル</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+
+<script defer>
+    const JUST_INTERACTED_MILISEC = 1000;
+
+    const controller_name = "{{ controller_name }}";
+    let remoteData = null;  // {name, description, buttons: [...]}
+    let mode = 'use';
+    let edits = {};
+    const canvas = document.getElementById('canvas');
+    const nameInput = document.getElementById('remote-name-input');
+    const descInput = document.getElementById('remote-description-input');
+
+    function renderButtons() {
+        canvas.innerHTML = "";
+        remoteData.buttons.forEach(btn => {
+            const el = document.createElement('div');
+            el.className = 'remote-button btn btn-sm';
+            el.textContent = btn.label;
+            el.dataset.id = btn.id;
+            el.dataset.code = btn.ir_code;
+            el.dataset.description = btn.description || "";
+            el.style.position = 'absolute';
+            el.style.left = (btn.pos_x || 0) + 'px';
+            el.style.top = (btn.pos_y || 0) + 'px';
+            el.style.width = (btn.width || 80) + 'px';
+            el.style.height = (btn.height || 60) + 'px';
+            el.style.backgroundColor = btn.color || '#28a745';
+            el.style.color = btn.text_color || '#000000';
+            el.style.cursor = mode === 'edit' ? 'move' : 'pointer';
+            el.style.fontSize = (btn.text_size || 14) + 'px';
+
+            // title属性だけでツールチップ代替
+            el.title = btn.description || "";
+
+            if (mode === 'edit') {
+                makeDraggable(el);
+                const resizeHandle = document.createElement('div');
+                resizeHandle.className = 'resize-handle';
+                el.appendChild(resizeHandle);
+                makeResizable(el, resizeHandle);
+            }
+
+            el.addEventListener('click', e => {
+                if (mode === 'use') {
+                    el.classList.add('clicked');
+                    setTimeout(() => el.classList.remove('clicked'), 150);
+                    fetch('/send_ir', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ code: btn.ir_code })
+                    }).then(res => res.json())
+                        .catch((e) => alert(`IR送信失敗: ${e}`));
+                } else {
+                    if (el.dataset.justInteracted === 'true') {
+                        el.dataset.justInteracted = 'false';
+                        return;
+                    }
+                    openEditModal(btn.id);
+                }
+            });
+
+            canvas.appendChild(el);
+        });
+    }
+
+    function openEditModal(id) {
+        const btn = remoteData.buttons.find(b => b.id === id);
+        if (!btn) return alert('ボタンが見つかりません');
+        document.getElementById('edit-id').value = btn.id;
+        document.getElementById('edit-label').value = btn.label;
+        document.getElementById('edit-code').value = btn.ir_code;
+        document.getElementById('edit-description').value = btn.description || "";
+        document.getElementById('edit-bgcolor').value = btn.color || '#28a745';
+        document.getElementById('edit-textcolor').value = btn.text_color || '#000000';
+        document.getElementById('edit-width').value = btn.width || 80;
+        document.getElementById('edit-height').value = btn.height || 60;
+        document.getElementById('edit-textsize').value = btn.text_size || 14;
+
+
+        // モーダルを表示
+        const editModal = document.getElementById('editModal');
+        editModal.classList.add('show');
+        editModal.style.display = 'block';
+        document.body.classList.add('modal-open'); // Bootstrap風のスクロール禁止
+
+        // 背景を暗くするためのオーバーレイを作成
+        createModalBackdrop();
+    }
+
+    function closeEditModal() {
+        const editModal = document.getElementById('editModal');
+        editModal.classList.remove('show');
+        editModal.style.display = 'none';
+        document.body.classList.remove('modal-open');
+        removeModalBackdrop();
+    }
+    const editModal = document.getElementById('editModal');
+
+    // モーダルの閉じるボタンのイベントを設定
+    editModal.querySelector('.close').addEventListener('click', closeEditModal);
+
+    // キャンセルボタン
+    editModal.querySelector('button.btn-secondary').addEventListener('click', closeEditModal);
+
+    // backdrop を自作
+    let modalBackdrop = null;
+    function createModalBackdrop() {
+        if (modalBackdrop) return;
+        modalBackdrop = document.createElement('div');
+        modalBackdrop.style.position = 'fixed';
+        modalBackdrop.style.top = 0;
+        modalBackdrop.style.left = 0;
+        modalBackdrop.style.width = '100vw';
+        modalBackdrop.style.height = '100vh';
+        modalBackdrop.style.backgroundColor = 'rgba(0,0,0,0.5)';
+        modalBackdrop.style.zIndex = 1040;
+        document.body.appendChild(modalBackdrop);
+
+        modalBackdrop.addEventListener('click', closeEditModal);
+    }
+    function removeModalBackdrop() {
+        if (!modalBackdrop) return;
+        modalBackdrop.remove();
+        modalBackdrop = null;
+    }
+
+    // フォーム送信後にモーダルを閉じる処理を書き換え
+    document.getElementById('edit-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const id = document.getElementById('edit-id').value;
+        const btn = remoteData.buttons.find(b => b.id === id);
+        if (!btn) return alert("編集対象のボタンが見つかりません");
+
+        btn.label = document.getElementById('edit-label').value;
+        btn.ir_code = document.getElementById('edit-code').value;
+        btn.description = document.getElementById('edit-description').value;
+        btn.color = document.getElementById('edit-bgcolor').value;
+        btn.text_color = document.getElementById('edit-textcolor').value;
+        btn.width = parseInt(document.getElementById('edit-width').value) || 80;
+        btn.height = parseInt(document.getElementById('edit-height').value) || 60;
+        btn.text_size = parseInt(document.getElementById('edit-textsize').value) || 14;
+
+        closeEditModal();
+        renderButtons();
+    });
+
+    document.getElementById('delete-button').addEventListener('click', () => {
+        if (!confirm("本当に削除しますか？")) return;
+        const id = document.getElementById('edit-id').value;
+        remoteData.buttons = remoteData.buttons.filter(b => b.id !== id);
+        closeEditModal();
+        renderButtons();
+    });
+
+
+    function makeDraggable(el) {
+        let startX, startY, origX, origY;
+        let moved = false;
+
+        function startDrag(e) {
+            e.preventDefault();
+            moved = false;
+
+            const touch = e.touches ? e.touches[0] : e;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            const rect = el.getBoundingClientRect();
+            const canvasRect = canvas.getBoundingClientRect();
+            origX = rect.left - canvasRect.left;
+            origY = rect.top - canvasRect.top;
+
+            document.addEventListener(e.type === 'touchstart' ? 'touchmove' : 'mousemove', onDrag);
+            document.addEventListener(e.type === 'touchstart' ? 'touchend' : 'mouseup', endDrag);
+        }
+
+        function onDrag(e) {
+            const touch = e.touches ? e.touches[0] : e;
+            let dx = touch.clientX - startX;
+            let dy = touch.clientY - startY;
+            let newX = origX + dx;
+            let newY = origY + dy;
+
+            const maxX = canvas.clientWidth - el.offsetWidth;
+            const maxY = canvas.clientHeight - el.offsetHeight;
+            newX = Math.max(0, Math.min(maxX, newX));
+            newY = Math.max(0, Math.min(maxY, newY));
+
+            el.style.left = newX + 'px';
+            el.style.top = newY + 'px';
+            moved = true;
+        }
+
+        function endDrag(e) {
+            document.removeEventListener('mousemove', onDrag);
+            document.removeEventListener('mouseup', endDrag);
+            document.removeEventListener('touchmove', onDrag);
+            document.removeEventListener('touchend', endDrag);
+
+            if (moved) {
+                const id = el.dataset.id;
+                if (!edits[id]) edits[id] = {};
+                edits[id].pos_x = parseInt(el.style.left);
+                edits[id].pos_y = parseInt(el.style.top);
+
+                // 👇 ドラッグ直後フラグを立てる
+                el.dataset.justInteracted = 'true';
+
+                // 少し後にリセット（例: 500ms）
+                setTimeout(() => {
+                    el.dataset.justInteracted = 'false';
+                }, JUST_INTERACTED_MILISEC);
+            }
+
+        }
+
+        el.addEventListener('mousedown', startDrag);
+        el.addEventListener('touchstart', startDrag);
+    }
+
+    function makeResizable(el, handle) {
+        let startX, startY, startWidth, startHeight;
+        const id = el.dataset.id;
+
+        function startResize(e) {
+            e.preventDefault();
+            e.stopPropagation(); // prevent triggering drag
+
+            const touch = e.touches ? e.touches[0] : e;
+            startX = touch.clientX;
+            startY = touch.clientY;
+            startWidth = el.offsetWidth;
+            startHeight = el.offsetHeight;
+
+            document.addEventListener(e.type === 'touchstart' ? 'touchmove' : 'mousemove', onResize);
+            document.addEventListener(e.type === 'touchstart' ? 'touchend' : 'mouseup', stopResize);
+        }
+
+        function onResize(e) {
+            const touch = e.touches ? e.touches[0] : e;
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            const newWidth = Math.max(40, startWidth + dx); // minimum width
+            const newHeight = Math.max(30, startHeight + dy); // minimum height
+
+            el.style.width = newWidth + 'px';
+            el.style.height = newHeight + 'px';
+
+            if (!edits[id]) edits[id] = {};
+            edits[id].width = newWidth;
+            edits[id].height = newHeight;
+        }
+
+        function stopResize() {
+            document.removeEventListener('mousemove', onResize);
+            document.removeEventListener('mouseup', stopResize);
+            document.removeEventListener('touchmove', onResize);
+            document.removeEventListener('touchend', stopResize);
+
+            el.dataset.justInteracted = 'true';
+            setTimeout(() => {
+                el.dataset.justInteracted = 'false';
+            }, JUST_INTERACTED_MILISEC);
+
+        }
+
+        handle.addEventListener('mousedown', startResize);
+        handle.addEventListener('touchstart', startResize);
+    }
+
+    function openEditModal(id) {
+        const btn = remoteData.buttons.find(b => b.id === id);
+        if (!btn) return alert('ボタンが見つかりません');
+        document.getElementById('edit-id').value = btn.id;
+        document.getElementById('edit-label').value = btn.label;
+        document.getElementById('edit-code').value = btn.ir_code;
+        document.getElementById('edit-description').value = btn.description || "";
+        document.getElementById('edit-bgcolor').value = btn.color || '#28a745';
+        document.getElementById('edit-textcolor').value = btn.text_color || '#000000';
+        document.getElementById('edit-width').value = btn.width || 80;
+        document.getElementById('edit-height').value = btn.height || 60;
+
+        const editModal = document.getElementById('editModal');
+        editModal.classList.add('show');
+        editModal.style.display = 'block';
+        document.body.classList.add('modal-open'); // Bootstrap風のスクロール禁止
+
+        // 背景を暗くするためのオーバーレイを作成
+        createModalBackdrop();
+
+    }
+
+    function saveAllChanges() {
+        // 位置などの編集をremoteDataに反映
+        Object.entries(edits).forEach(([id, changes]) => {
+            const btn = remoteData.buttons.find(b => b.id === id);
+            if (btn) {
+                Object.assign(btn, changes);
+            }
+        });
+
+        // メタ情報の更新（名前と説明）
+        remoteData.name = nameInput.value.trim();
+        remoteData.description = descInput.value.trim();
+
+        // ここでサーバーにmeta.jsonとsetting.json両方更新を依頼
+        // 今回はmeta.jsonとsetting.jsonをまとめてPOSTするAPIを想定
+        // 例）/api/controller/<filename_without_ext>
+        // filenameは controller1.json → controller1 に変換
+
+        fetch(`/api/controller/${controller_name}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(remoteData)
+        }).then(res => res.json())
+            .then(data => {
+                if (data.status === "saved") {
+                    //alert("保存しました");
+                    edits = {};
+                    renderButtons();
+                } else {
+                    alert("保存失敗: " + (data.error || "不明なエラー"));
+                }
+            }).catch(() => alert("保存に失敗しました"));
+    }
+
+    document.getElementById('toggle-mode').addEventListener('click', () => {
+        mode = (mode === 'use') ? 'edit' : 'use';
+        setMode(mode);
+    });
+
+    document.getElementById('save-edits').addEventListener('click', () => {
+        saveAllChanges();
+    });
+
+    document.getElementById('edit-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const id = document.getElementById('edit-id').value;
+        const btn = remoteData.buttons.find(b => b.id === id);
+        if (!btn) return alert("編集対象のボタンが見つかりません");
+
+        btn.label = document.getElementById('edit-label').value;
+        btn.ir_code = document.getElementById('edit-code').value;
+        btn.description = document.getElementById('edit-description').value;
+        btn.color = document.getElementById('edit-bgcolor').value;
+        btn.text_color = document.getElementById('edit-textcolor').value;
+        btn.width = parseInt(document.getElementById('edit-width').value) || 80;
+        btn.height = parseInt(document.getElementById('edit-height').value) || 60;
+
+        closeEditModal();
+        renderButtons();
+    });
+
+    document.getElementById('delete-button').addEventListener('click', () => {
+        if (!confirm("本当に削除しますか？")) return;
+        const id = document.getElementById('edit-id').value;
+        remoteData.buttons = remoteData.buttons.filter(b => b.id !== id);
+        closeEditModal();
+        renderButtons();
+    });
+
+    document.getElementById('add-button-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const label = document.getElementById('new-label').value.trim();
+        const ir_code = document.getElementById('new-ir-code').value.trim();
+        const description = document.getElementById('new-description').value.trim();
+
+        if (!label || !ir_code) {
+            alert("ラベルとIRコードは必須です");
+            return;
+        }
+
+        const newId = Date.now().toString();
+
+        remoteData.buttons.push({
+            id: newId,
+            label,
+            ir_code,
+            description,
+            pos_x: 10,
+            pos_y: 10,
+            width: 80,
+            height: 60,
+            color: '#FFFFFF',
+            text_color: '#000000'
+        });
+
+        document.getElementById('new-label').value = "";
+        document.getElementById('new-ir-code').value = "";
+        document.getElementById('new-description').value = "";
+
+        renderButtons();
+    });
+
+    function setMode(newMode) {
+        mode = newMode;
+        document.getElementById('mode-label').textContent = mode;
+        document.getElementById('save-edits').style.display = (mode === 'edit' ? 'inline-block' : 'none');
+        document.getElementById('add-button-container').style.display = (mode === 'edit' ? 'block' : 'none');
+        //nameInput.readOnly = (mode !== 'edit');
+        descInput.readOnly = (mode !== 'edit');
+        renderButtons();
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+        fetch(`/api/controller/${controller_name}`)
+            .then(res => {
+                if (!res.ok) throw new Error("読み込み失敗");
+                return res.json();
+            })
+            .then(data => {
+                remoteData = data;
+                if (!remoteData.buttons) remoteData.buttons = [];
+                nameInput.value = remoteData.name || controller_name;
+                descInput.value = remoteData.description || "";
+                setMode('use');
+            })
+            .catch(err => {
+                alert("コントローラデータの読み込みに失敗しました");
+                console.error(err);
+            });
+    });
+</script>
+{% endblock %}

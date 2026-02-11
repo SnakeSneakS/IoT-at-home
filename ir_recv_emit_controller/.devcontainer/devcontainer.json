@@ -1,0 +1,26 @@
+{
+    "name": "ir-recv-emit-dev",
+    "build": {
+        "dockerfile": "../server/Dockerfile.dev",
+        "context": "../server"
+    },
+    "workspaceFolder": "/workspace",
+    "mounts": [
+        "source=${localWorkspaceFolder}/server,target=/workspace,type=bind"
+    ],
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "python.defaultInterpreterPath": "/opt/venv/bin/python"
+            }
+        }
+    },
+    "runArgs": [
+        "--device=/dev/cu.usbmodem1101"
+    ],
+    "remoteUser": "root",
+    "forwardPorts": [
+        8080
+    ],
+}

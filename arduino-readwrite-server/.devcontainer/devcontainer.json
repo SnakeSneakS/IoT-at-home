@@ -1,0 +1,19 @@
+{
+    "name": "arduino-serial-api",
+    "image": "rust:1.75",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "vadimcn.vscode-lldb"
+            ]
+        }
+    },
+    "runArgs": [
+        "--device=/dev/cu.usbmodem1101:/dev/ttyUSB0"
+    ],
+    "postCreateCommand": "apt-get update && apt-get install -y libudev-dev",
+    "forwardPorts": [
+        3000
+    ]
+}

@@ -1,0 +1,5 @@
+# Rust/Cargo
+target/
+**/*.rs.bk
+**/*.rs.swp
+Cargo.lock
