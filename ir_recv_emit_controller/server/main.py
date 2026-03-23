@@ -1,25 +1,44 @@
-import os
 import json
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
-from flask_socketio import SocketIO
+import os
 import threading
-import serial
-import time
-from datetime import datetime
 from functools import wraps
+
 import dotenv
+import websocket
+from flask import (
+    Flask,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
+from flask_socketio import SocketIO
+
+
+def must_get_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        raise RuntimeError(f"環境変数 {name} が設定されていません")
+    return value
+
 
 # =========================
 # 設定値
 # =========================
 dotenv.load_dotenv()
-DB_NAME = "ir_remotes.db"  # 今回は使わないけど認証はそのまま
-USERNAME = os.getenv("USERNAME")
-PASSWORD = os.getenv("PASSWORD")
-PORT = os.getenv("PORT",8080)
+# DB_NAME = "ir_remotes.db"  # 今回は使わない
+USERNAME = must_get_env("APP_USERNAME")
+PASSWORD = must_get_env("APP_PASSWORD")
+PORT = os.getenv("PORT", 8080)
+HOST = os.getenv("HOST", "0.0.0.0")
+ARDUINO_READWRITE_WS_API_KEY = must_get_env("ARDUINO_READWRITE_WS_API_KEY")
+ARDUINO_READWRITE_WS_URL = os.getenv(
+    "ARDUINO_READWRITE_WS_URL", "ws://127.0.0.1:3000/ws"
+)
 
-SERIAL_PORT = os.getenv("SERIAL_PORT_PATH") 
-BAUD_RATE = os.getenv("BAUD_RATE",9600)
 
 CONTROLLER_DIR = "out"  # JSONファイル格納ディレクトリ（フォルダに変更）
 os.makedirs(CONTROLLER_DIR, exist_ok=True)
@@ -31,55 +50,65 @@ DATA_SETTING_FILENAME = "setting.json"
 # =========================
 app = Flask(__name__)
 app.secret_key = "超秘密のキーにしてください"
-socketio = SocketIO(app, async_mode='threading')
+socketio = SocketIO(app, async_mode="threading")
+
 
 # =========================
-# シリアルポート接続
+# Websocketスレッド
 # =========================
-try:
-    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-except Exception as e:
-    print("Serial port open error:", e)
-    ser = None
+ws_client = None
 
-# =========================
-# シリアル受信スレッド
-# =========================
-def serial_listener():
-    global ser
-    while True:
-        if ser is None:
-            time.sleep(30)
-            try:
-                ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-                print("Serial port reconnected.")
-            except Exception as e:
-                print("Failed to reopen serial port:", e)
-            continue
+
+def ws_listener():
+    global ws_client
+
+    def on_message(ws, message):
+        # WebSockettサーバーからのログを Flask SocketIO に送信
         try:
-            line = ser.readline().decode(errors="ignore").strip()
-            if line:
-                print("Received serial output from:", line)
-                if line.startswith("Received IR Code:"):
-                    socketio.emit('ir_signal', {
-                        #'time': datetime.now().strftime("%H:%M:%S"),
-                        'code': line
-                    })
-                    #print(line)
-                
-
-        except serial.SerialException as e:
-            print("Serial error:", e)
-            try:
-                ser.close()
-            except:
-                pass
-            ser = None
+            log = json.loads(message)
+            socketio.emit("ir_signal", {"code": log["line"]})
         except Exception as e:
-            print("Unexpected error:", e)
+            print("Failed to parse WS message:", e)
 
-listener_thread = threading.Thread(target=serial_listener, daemon=True)
+    def on_error(ws, error):
+        print("WebSocket error:", error)
+        os._exit(1)
+
+    def on_close(ws, close_status_code, close_msg):
+        print("WebSocket closed:", close_status_code, close_msg)
+        os._exit(1)
+
+    def on_open(ws):
+        print("Connected to Rust WS server")
+
+    headers = [f"x-api-key: {ARDUINO_READWRITE_WS_API_KEY}"]
+
+    ws_client = websocket.WebSocketApp(
+        ARDUINO_READWRITE_WS_URL,
+        header=headers,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close,
+        on_open=on_open,
+    )
+    ws_client.run_forever()
+
+
+try:
+    ws_test = websocket.create_connection(
+        ARDUINO_READWRITE_WS_URL,
+        header=[f"x-api-key: {ARDUINO_READWRITE_WS_API_KEY}"],
+        timeout=5,  # 接続タイムアウト
+    )
+    ws_test.close()
+except Exception as e:
+    raise RuntimeError(f"Rust WS サーバーに接続できません: {e}")
+
+
+# バックグラウンドで WS 接続開始
+listener_thread = threading.Thread(target=ws_listener, daemon=True)
 listener_thread.start()
+
 
 # =========================
 # 認証機能
@@ -91,7 +120,9 @@ def login_required(f):
             flash("ログインしてください")
             return redirect(url_for("login"))
         return f(*args, **kwargs)
+
     return decorated_function
+
 
 # =========================
 # ファイル・フォルダ名チェック
@@ -99,21 +130,26 @@ def login_required(f):
 def safe_foldername(foldername):
     # フォルダ名として使う文字列の簡易チェック（英数字と-_のみ許可など）
     import re
+
     return bool(re.match(r"^[a-zA-Z0-9_-]+$", foldername))
+
 
 def get_controller_dir(name):
     # コントローラ名（拡張子なし）からディレクトリパスを返す
     return os.path.join(CONTROLLER_DIR, name)
 
+
 # =========================
 # ルーティング
 # =========================
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
         username = request.form.get("username")
         password = request.form.get("password")
+        # print("hoge",username,password,USERNAME,PASSWORD)
         if username == USERNAME and password == PASSWORD:
             session["logged_in"] = True
             flash("ログイン成功しました")
@@ -122,11 +158,26 @@ def login():
             flash("ユーザー名かパスワードが間違っています")
     return render_template("login.html")
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     flash("ログアウトしました")
     return redirect(url_for("login"))
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """
+    ヘルスチェック用エンドポイント
+    """
+    return jsonify(
+        {
+            "status": "ok",
+            "ws_connected": ws_client and ws_client.sock and ws_client.sock.connected,
+        }
+    )
+
 
 @app.route("/")
 @login_required
@@ -149,11 +200,11 @@ def index():
                 description = "(読み込みエラー)"
         else:
             description = "(メタ情報なし)"
-        controllers.append({
-            "name": foldername,
-            "description": description
-        })
-    return render_template("index.html", controllers=sorted(controllers, key=lambda x: x["name"]))
+        controllers.append({"name": foldername, "description": description})
+    return render_template(
+        "index.html", controllers=sorted(controllers, key=lambda x: x["name"])
+    )
+
 
 @app.route("/controller/<controller_name>")
 @login_required
@@ -166,6 +217,7 @@ def controller_editor(controller_name):
         flash("指定されたコントローラデータが見つかりません")
         return redirect(url_for("index"))
     return render_template("controller.html", controller_name=controller_name)
+
 
 # ①コントローラ一覧API
 @app.route("/api/controllers", methods=["GET"])
@@ -188,11 +240,9 @@ def api_list_controllers():
                 description = "(読み込みエラー)"
         else:
             description = "(メタ情報なし)"
-        controllers.append({
-            "name": foldername,
-            "description": description
-        })
+        controllers.append({"name": foldername, "description": description})
     return jsonify({"controllers": controllers})
+
 
 # ②コントローラ新規作成API
 @app.route("/api/controllers/<controller_name>", methods=["POST"])
@@ -211,31 +261,26 @@ def api_create_controller(controller_name):
 
     data = request.get_json()
     if not data:
-        data = {
-            "name": controller_name,
-            "description": "",
-            "buttons": []
-        }
+        data = {"name": controller_name, "description": "", "buttons": []}
 
     try:
         os.makedirs(dir_path, exist_ok=False)  # 新規作成
 
         meta = {
             "name": data.get("name", controller_name),
-            "description": data.get("description", "")
+            "description": data.get("description", ""),
         }
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
-        setting = {
-            "buttons": data.get("buttons", [])
-        }
+        setting = {"buttons": data.get("buttons", [])}
         with open(setting_path, "w", encoding="utf-8") as f:
             json.dump(setting, f, ensure_ascii=False, indent=2)
 
         return jsonify({"status": "created"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ③コントローラ読み書きAPI (GET/POST)
 @app.route("/api/controller/<controller_name>", methods=["GET", "POST"])
@@ -260,7 +305,7 @@ def api_controller(controller_name):
             data = {
                 "name": meta.get("name", controller_name),
                 "description": meta.get("description", ""),
-                "buttons": setting.get("buttons", [])
+                "buttons": setting.get("buttons", []),
             }
             return jsonify(data)
         except Exception as e:
@@ -274,14 +319,12 @@ def api_controller(controller_name):
         try:
             meta = {
                 "name": data.get("name", controller_name),
-                "description": data.get("description", "")
+                "description": data.get("description", ""),
             }
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
 
-            setting = {
-                "buttons": data.get("buttons", [])
-            }
+            setting = {"buttons": data.get("buttons", [])}
             with open(setting_path, "w", encoding="utf-8") as f:
                 json.dump(setting, f, ensure_ascii=False, indent=2)
 
@@ -289,11 +332,13 @@ def api_controller(controller_name):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
+
 # ④コントローラ削除API
 @app.route("/api/controllers/<controller_name>", methods=["DELETE"])
 @login_required
 def api_delete_controller(controller_name):
     import shutil
+
     if not safe_foldername(controller_name):
         return jsonify({"error": "不正なフォルダ名です"}), 400
     dir_path = get_controller_dir(controller_name)
@@ -305,6 +350,7 @@ def api_delete_controller(controller_name):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 # send_ir は既存のまま
 @app.route("/send_ir", methods=["POST"])
 @login_required
@@ -314,20 +360,20 @@ def send_ir():
     if not code:
         return jsonify({"status": "error", "message": "コード指定なし"}), 400
 
-    if ser is None:
-        return jsonify({"status": "error", "message": "シリアルポート未接続"}), 500
-
     try:
-        cmd = f"SEND {code}\n"
-        #print(cmd)
-        ser.write(cmd.encode())
-        print(cmd)
-        return jsonify({"status": "ok", "message": f"送信: {code}"})
+        if ws_client and ws_client.sock and ws_client.sock.connected:
+            cmd = f"SEND_IR {code}\n"
+            ws_client.send(cmd)
+            print("Sent to Rust WS:", cmd)
+            return jsonify({"status": "ok", "message": f"送信: {code}"})
+        else:
+            return jsonify({"status": "error", "message": "Rust WS 未接続"}), 500
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 # =========================
 # メイン実行
 # =========================
 if __name__ == "__main__":
-    socketio.run(app,debug=True)
+    socketio.run(app, host=HOST, port=PORT, debug=True)
