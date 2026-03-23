@@ -1,0 +1,3 @@
+https://www.amazon.co.jp/dp/B0DGQ6G1V3?ref=ppx_yo2ov_dt_b_fed_asin_title
+
+パラメータ: 5mm トランスミッター電圧: 1.3-1.5V、極性: アノード '+' (長い脚)、カソード '-' (短い脚)、レシーバー VS1838B 電圧: 2.7V-5.5V、波長: 940、ピン間隔: 2.54mm/0.1 インチ。

@@ -4,3 +4,10 @@
 *.log
 *.tmp
 .DS_Store
+
+# 
+Arduino-CDROM-2022/
+
+# will update later
+robot-4-legs/
+todo.md
