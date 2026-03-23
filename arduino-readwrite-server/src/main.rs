@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
     env,
-    io::{Read, Write},
+    io::{ErrorKind, Read, Write},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -118,6 +118,7 @@ async fn main() {
                 while let Ok(data) = write_rx.try_recv() {
                     if let Err(e) = port.write_all(data.as_bytes()) {
                         error!("Serial write error: {:?}", e);
+                        std::process::exit(1);
                     }
                 }
 
@@ -157,7 +158,18 @@ async fn main() {
                             line_buffer = line_buffer[pos + 1..].to_string();
                         }
                     }
-                    _ => {}
+                    Ok(_) => {}
+
+                    // 👇 ここがポイント（タイムアウト無視）
+                    Err(ref e) if e.kind() == ErrorKind::TimedOut => {
+                        // 何もしない（ログも出さないのが普通）
+                    }
+
+                    // 👇 それ以外は異常として扱う
+                    Err(e) => {
+                        error!("Serial read error: {:?}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         });
